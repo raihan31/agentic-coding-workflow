@@ -107,11 +107,33 @@ ipcMain.handle('desktop:select-file', async (_event, filters) => {
   if (result.canceled || !result.filePaths.length) return null;
   const filePath = result.filePaths[0];
   const stats = fs.statSync(filePath);
+  const data = fs.readFileSync(filePath).toString('base64');
   return {
     path: filePath,
     name: path.basename(filePath),
     size: stats.size,
+    data,
   };
+});
+
+ipcMain.handle('desktop:is-git-repo', async (_event, dirPath) => {
+  if (!dirPath) return false;
+  try {
+    return fs.existsSync(path.join(dirPath, '.git'));
+  } catch {
+    return false;
+  }
+});
+
+ipcMain.handle('desktop:init-git-repo', async (_event, dirPath) => {
+  if (!dirPath || !fs.existsSync(dirPath)) return { ok: false, error: 'Directory does not exist' };
+  try {
+    const { execSync } = require('child_process');
+    execSync('git init -b main && git config user.name "Agentic Developer" && git config user.email "developer@agentic.local" && git commit --allow-empty -m "initial commit"', { cwd: dirPath, stdio: 'pipe' });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message || 'Failed to initialize git repository' };
+  }
 });
 
 ipcMain.handle('desktop:open-in-editor', async (_event, { filePath, line = 1, editor = 'vscode' }) => {

@@ -23,4 +23,13 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   openPath: async (filePath) => {
     return await ipcRenderer.invoke('desktop:open-path', filePath);
   },
+
+  isGitRepo: async (dirPath) => {
+    return await ipcRenderer.invoke('desktop:is-git-repo', dirPath);
+  },
+
+  initGitRepo: async (dirPath) => {
+    return await ipcRenderer.invoke('desktop:init-git-repo', dirPath);
+  },
 });
+

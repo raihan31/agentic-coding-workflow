@@ -2,6 +2,7 @@ export interface DesktopFile {
   path: string;
   name: string;
   size: number;
+  data?: string;
 }
 
 export interface DesktopAPI {
@@ -12,6 +13,8 @@ export interface DesktopAPI {
   openInEditor(filePath: string, line?: number, editor?: 'vscode' | 'cursor'): Promise<boolean>;
   sendNotification(title: string, body: string): void;
   openPath(filePath: string): Promise<boolean>;
+  isGitRepo(dirPath: string): Promise<boolean>;
+  initGitRepo(dirPath: string): Promise<{ ok: boolean; error?: string }>;
 }
 
 declare global {
