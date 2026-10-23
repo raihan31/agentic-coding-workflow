@@ -21,6 +21,31 @@ export function NewProjectPage() {
     },
     onSuccess: ({ id }) => navigate({ name: 'project', id, tab: 'overview' }),
   });
+  const isDesktop = typeof window !== 'undefined' && Boolean(window.desktopAPI?.isDesktop);
+
+  const handleBrowseRepo = async () => {
+    if (window.desktopAPI) {
+      const selected = await window.desktopAPI.selectDirectory(repo || undefined);
+      if (selected) setRepo(selected);
+    }
+  };
+
+  const handleBrowseDocument = async () => {
+    if (window.desktopAPI) {
+      const doc = await window.desktopAPI.selectFile();
+      if (doc) {
+        try {
+          const res = await fetch(`file://${doc.path}`);
+          const blob = await res.blob();
+          setFile(new File([blob], doc.name));
+        } catch {
+          // Fallback if local file protocol is disabled
+          setFile(new File([''], doc.name));
+        }
+      }
+    }
+  };
+
   return (
     <div className="mx-auto max-w-2xl space-y-4">
       <div>
@@ -30,7 +55,14 @@ export function NewProjectPage() {
       <Card>
         <form className="space-y-5" onSubmit={e => { e.preventDefault(); create.mutate(); }}>
           <div>
-            <label className="text-sm font-medium" htmlFor="document">Requirements document</label>
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium" htmlFor="document">Requirements document</label>
+              {isDesktop && (
+                <button type="button" onClick={handleBrowseDocument} className="text-xs text-accent hover:underline">
+                  Browse file…
+                </button>
+              )}
+            </div>
             <label htmlFor="document"
               onDragOver={e => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
               onDrop={e => { e.preventDefault(); setDragging(false); if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]); }}
@@ -42,8 +74,13 @@ export function NewProjectPage() {
           </div>
           <div>
             <label className="text-sm font-medium" htmlFor="repo">Repository path on the server</label>
-            <input id="repo" value={repo} onChange={e => setRepo(e.target.value)} placeholder="/absolute/path/to/git/repo" required
-              className="mt-1.5 w-full rounded-md border border-line bg-page px-3 py-2 font-mono text-sm" />
+            <div className="mt-1.5 flex gap-2">
+              <input id="repo" value={repo} onChange={e => setRepo(e.target.value)} placeholder="/absolute/path/to/git/repo" required
+                className="flex-1 rounded-md border border-line bg-page px-3 py-2 font-mono text-sm" />
+              {isDesktop && (
+                <Button type="button" onClick={handleBrowseRepo}>Browse…</Button>
+              )}
+            </div>
             <p className="mt-1 text-xs text-muted">Must be a clean, committed Git repository. Work happens on a new branch in a separate worktree.</p>
           </div>
           <details>

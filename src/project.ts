@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { copyFile, mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
+import pLimit from 'p-limit';
 import { AgentError, ClaudeStructured, RateLimitedError, type Agent } from './adapters.js';
 import { backlogJsonSchema, BacklogError, parseBacklog, renderBacklogMarkdown, taskOrder, unansweredBlockingQuestions, type Backlog, type Task } from './backlog.js';
 import type { CheckRunner } from './checks.js';
@@ -272,7 +273,7 @@ export function taskBrief(backlog: Backlog, task: Task, done: Task[], documentPa
   ].join('\n') + guidanceSection(guidance);
 }
 
-export interface RunPlan { order: { id: string; dependsOn: string[] }[]; maxRepairs: number; }
+export interface RunPlan { order: { id: string; dependsOn: string[] }[]; maxRepairs: number; maxConcurrency?: number; }
 
 /** Approval gate + run setup: validates the (possibly edited) backlog, resets non-done tasks, cleans the worktree. */
 export async function beginRun(dir: string, runId: string, store: ProjectStore): Promise<RunPlan> {
@@ -301,7 +302,7 @@ export async function beginRun(dir: string, runId: string, store: ProjectStore):
   await discardChanges(s.worktree); // a crashed run may have left a task half-done
   await track.event('backlog.approved', { backlogSha256: s.approval.backlogSha256 });
   await track.setStatus('running');
-  return { order: taskOrder(backlog.tasks).map(t => ({ id: t.id, dependsOn: t.dependsOn })), maxRepairs: loaded.config.maxRepairs };
+  return { order: taskOrder(backlog.tasks).map(t => ({ id: t.id, dependsOn: t.dependsOn })), maxRepairs: loaded.config.maxRepairs, maxConcurrency: loaded.config.project.maxConcurrency };
 }
 
 export type TaskStart = { kind: 'skip' } | { kind: 'blocked'; waitingOn: string[] } | { kind: 'ready'; input: TaskInput };
@@ -335,6 +336,23 @@ export async function startNextTask(dir: string, runId: string, store: ProjectSt
   const next = taskOrder(backlog!.tasks).find(t => state.tasks[t.id]?.status === 'pending');
   if (!next) return { kind: 'none' };
   return { ...await startTask(dir, runId, next.id, store), taskId: next.id };
+}
+
+/** Finds all tasks currently ready to run in parallel (pending and all dependencies satisfied). */
+export async function getReadyTasks(dir: string, runId: string, store: ProjectStore): Promise<(TaskStart & { taskId: string })[]> {
+  const { backlog, state } = await readProject(dir);
+  const pending = backlog!.tasks.filter(t => state.tasks[t.id]?.status === 'pending');
+  const ready: (TaskStart & { taskId: string })[] = [];
+  for (const t of pending) {
+    const unfulfilled = t.dependsOn.filter(d => state.tasks[d]?.status !== 'done');
+    if (unfulfilled.length === 0) {
+      const res = await startTask(dir, runId, t.id, store);
+      if (res.kind === 'ready') {
+        ready.push({ ...res, taskId: t.id });
+      }
+    }
+  }
+  return ready;
 }
 
 /** What the drivers report when a task has used up its repairs. `requirement` is the brief of the last round. */
@@ -535,6 +553,65 @@ export const isStop = (error: unknown) => error instanceof BudgetExceeded || err
 
 export interface RunProjectOptions extends ProjectDeps { projectDir: string; /** Overrides the config saved at analyze time. */ config?: Config; }
 
+async function executeTaskWithLifecycle(
+  dir: string,
+  runId: string,
+  start: { kind: 'ready'; input: TaskInput; taskId: string },
+  session: Session,
+  plan: RunPlan,
+  log: Logger,
+  store: ProjectStore
+): Promise<void> {
+  const id = start.taskId;
+  const tlog = log.child({ task: id });
+  tlog.info(`task ${id}`);
+  await withSpan('agentic.task', { 'agentic.task_id': id }, async span => {
+    try {
+      const s = { ...session, log: tlog };
+      let input = start.input;
+      let attempts = 0;
+      for (let round = 0; ; round++) {
+        const planText = await planTask(s, { ...input, round });
+        let feedback = '';
+        let result: AttemptResult | undefined;
+        const gates: Gate[] = [];
+        for (let i = 0; i <= plan.maxRepairs; i++) {
+          result = await attemptTask(s, input, planText, feedback, attempts++);
+          gates.push(result.gate);
+          if (result.gate === 'passed') break;
+          feedback = result.feedback;
+        }
+        if (result?.gate === 'passed') {
+          await completeTask(dir, runId, id, { passed: true, attempts, reviewSummary: result.review?.summary }, store);
+          break;
+        }
+        const decision = await superviseTask(session, dir, runId, id, { requirement: input.requirement, attempts, gates, feedback, reviewSummary: result?.review?.summary }, store);
+        if (decision.decision === 'retry') {
+          input = { ...input, requirement: input.requirement + guidanceSection([{ from: 'manager', text: decision.guidance! }]) };
+          continue;
+        }
+        if (decision.decision === 'split') {
+          await splitTask(dir, runId, id, decision.subtasks!, store).catch(async error => {
+            if (!(error instanceof BacklogError)) throw error;
+            await completeTask(dir, runId, id, { passed: false, attempts, note: `the manager's split was invalid: ${message(error).slice(0, 300)}` }, store);
+          });
+        } else if (decision.decision === 'escalate') {
+          await escalateTask(dir, runId, id, decision.question!, store, { waitForHuman: false });
+        } else {
+          await completeTask(dir, runId, id, { passed: false, attempts, reviewSummary: result?.review?.summary, note: `manager: ${decision.rationale}` }, store);
+        }
+        break;
+      }
+      const status = (await readProject(dir)).state.tasks[id]?.status ?? 'split';
+      span.setAttributes({ 'agentic.task.status': status, 'agentic.attempts': attempts });
+      tlog.info({ status, attempts }, `task ${status}`);
+    } catch (error) {
+      await abandonTask(dir, runId, id, message(error), store);
+      throw error;
+    }
+  });
+}
+
 /** Runs the approved backlog in this process (the Temporal workflow drives the same steps durably). */
 export async function runProject(opts: RunProjectOptions): Promise<ProjectState> {
   const dir = resolve(opts.projectDir);
@@ -550,57 +627,27 @@ export async function runProject(opts: RunProjectOptions): Promise<ProjectState>
     return await withSpan('agentic.project.run', { 'agentic.project_id': state.id, 'agentic.run_id': runId }, async () => {
       let stopped: { status: ProjectStatus; error: string } | undefined;
       try {
-        for (;;) {
-          const start = await startNextTask(dir, runId, store);
-          if (start.kind === 'none') break;
-          if (start.kind !== 'ready') continue;
-          const id = start.taskId;
-          const tlog = log.child({ task: id });
-          tlog.info(`task ${id}`);
-          await withSpan('agentic.task', { 'agentic.task_id': id }, async span => {
-            try {
-              const s = { ...session!, log: tlog };
-              let input = start.input;
-              let attempts = 0;
-              for (let round = 0; ; round++) {
-                const planText = await planTask(s, { ...input, round });
-                let feedback = '';
-                let result: AttemptResult | undefined;
-                const gates: Gate[] = [];
-                for (let i = 0; i <= plan.maxRepairs; i++) {
-                  result = await attemptTask(s, input, planText, feedback, attempts++);
-                  gates.push(result.gate);
-                  if (result.gate === 'passed') break;
-                  feedback = result.feedback;
-                }
-                if (result?.gate === 'passed') {
-                  await completeTask(dir, runId, id, { passed: true, attempts, reviewSummary: result.review?.summary }, store);
-                  break;
-                }
-                const decision = await superviseTask(session, dir, runId, id, { requirement: input.requirement, attempts, gates, feedback, reviewSummary: result?.review?.summary }, store);
-                if (decision.decision === 'retry') {
-                  input = { ...input, requirement: input.requirement + guidanceSection([{ from: 'manager', text: decision.guidance! }]) };
-                  continue;
-                }
-                if (decision.decision === 'split') {
-                  await splitTask(dir, runId, id, decision.subtasks!, store).catch(async error => {
-                    if (!(error instanceof BacklogError)) throw error;
-                    await completeTask(dir, runId, id, { passed: false, attempts, note: `the manager's split was invalid: ${message(error).slice(0, 300)}` }, store);
-                  });
-                }
-                // No one to ask in this process: the question is recorded and the project ends as needs_attention.
-                else if (decision.decision === 'escalate') await escalateTask(dir, runId, id, decision.question!, store, { waitForHuman: false });
-                else await completeTask(dir, runId, id, { passed: false, attempts, reviewSummary: result?.review?.summary, note: `manager: ${decision.rationale}` }, store);
-                break;
-              }
-              const status = (await readProject(dir)).state.tasks[id]?.status ?? 'split';
-              span.setAttributes({ 'agentic.task.status': status, 'agentic.attempts': attempts });
-              tlog.info({ status, attempts }, `task ${status}`);
-            } catch (error) {
-              await abandonTask(dir, runId, id, message(error), store);
-              throw error;
+        const concurrency = plan.maxConcurrency ?? 1;
+        if (concurrency > 1) {
+          const limit = pLimit(concurrency);
+          for (;;) {
+            const readyTasks = await getReadyTasks(dir, runId, store);
+            if (!readyTasks.length) {
+              const { state: curState } = await readProject(dir);
+              const hasPending = Object.values(curState.tasks).some(t => t.status === 'pending');
+              if (!hasPending) break;
+              const anyRunning = Object.values(curState.tasks).some(t => t.status === 'running');
+              if (!anyRunning) break;
             }
-          });
+            await Promise.all(readyTasks.map(t => limit(() => executeTaskWithLifecycle(dir, runId, t as { kind: 'ready'; input: TaskInput; taskId: string }, session!, plan, log, store))));
+          }
+        } else {
+          for (;;) {
+            const start = await startNextTask(dir, runId, store);
+            if (start.kind === 'none') break;
+            if (start.kind !== 'ready') continue;
+            await executeTaskWithLifecycle(dir, runId, start, session!, plan, log, store);
+          }
         }
       } catch (error) {
         if (!isStop(error)) {

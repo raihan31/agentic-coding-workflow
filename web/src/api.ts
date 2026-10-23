@@ -78,6 +78,18 @@ export function useLiveEvents(projectId?: string): boolean {
     source.onmessage = msg => {
       const event = JSON.parse(msg.data) as ProjectEvent;
       qc.setQueryData<ProjectEvent[]>(['events', event.projectId], old => old && !old.some(e => e.id === event.id) ? [...old, event] : old);
+
+      // Native desktop notifications
+      if (typeof window !== 'undefined' && window.desktopAPI?.sendNotification) {
+        if (event.type === 'backlog.ready' || event.type === 'backlog.approved') {
+          window.desktopAPI.sendNotification('Orchestrator Update', `Project ${event.projectId}: Backlog status updated`);
+        } else if (event.type === 'project.completed') {
+          window.desktopAPI.sendNotification('Project Completed', `Project ${event.projectId} successfully finished!`);
+        } else if (event.type === 'task.failed' || event.type === 'needs_attention') {
+          window.desktopAPI.sendNotification('Action Needed', `Task in project ${event.projectId} needs your input`);
+        }
+      }
+
       clearTimeout(timer);
       timer = setTimeout(() => {
         void qc.invalidateQueries({ queryKey: ['project', event.projectId] });

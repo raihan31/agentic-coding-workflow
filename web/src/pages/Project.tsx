@@ -2,6 +2,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 import { api, useLiveEvents, type ProjectDetail, type ProjectEvent, type Task } from '../api';
 import { Button, Card, CodeView, Empty, ErrorNote, Rich, SegmentBar, Stat, StatusBadge, Tabs, statusInfo } from '../components';
+import { DiffViewer } from '../components/DiffViewer';
+import { PlanApprovalModal } from '../components/PlanApprovalModal';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { clock, compact, duration, repoName, usd } from '../format';
 import { navigate, type Route } from '../router';
 
@@ -29,6 +33,18 @@ export function ProjectPage({ route }: { route: ProjectRoute }) {
   const p = project.data;
   const phase = p.workflow?.phase;
   const openQuestions = p.backlog?.openQuestions.filter(q => q.blocking && !q.answer).length ?? 0;
+  const [planModalOpen, setPlanModalOpen] = useState(false);
+  const planQuery = useQuery({
+    queryKey: ['planFile', p.id],
+    queryFn: async () => {
+      try {
+        return await api.projectFile(p.id, 'plan.md');
+      } catch {
+        return await api.projectFile(p.id, 'backlog.md');
+      }
+    },
+    enabled: planModalOpen,
+  });
 
   return (
     <div className="space-y-5">
@@ -49,7 +65,7 @@ export function ProjectPage({ route }: { route: ProjectRoute }) {
           {p.state.delivery?.prUrl && <a href={p.state.delivery.prUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-sm font-medium hover:bg-raised">Pull request #{p.state.delivery.prNumber} <span aria-hidden>↗</span></a>}
           {p.status === 'completed' && !p.state.delivery?.prUrl && <Button kind="primary" onClick={() => deliver.mutate()} disabled={deliver.isPending} title="Push the project branch and open a draft pull request">{deliver.isPending ? 'Delivering…' : 'Push & open PR'}</Button>}
           {RERUNNABLE.has(p.status) && (!phase || phase === 'finished') && <Button kind="primary" onClick={() => rerun.mutate()} disabled={rerun.isPending} title="Start a new run: done tasks are kept, the rest are retried">{rerun.isPending ? 'Starting…' : 'Run again'}</Button>}
-          {phase === 'awaiting_approval' && <Button kind="primary" onClick={() => setTab('backlog')}>Review &amp; approve backlog</Button>}
+          {(phase === 'awaiting_approval' || p.status === 'backlog_ready') && <Button kind="primary" onClick={() => setPlanModalOpen(true)}>Review &amp; Approve Plan</Button>}
           {phase === 'running' && <Button onClick={() => action.mutate('pause')} disabled={action.isPending} title="Stops before the next task">Pause</Button>}
           {phase === 'paused' && <Button kind="primary" onClick={() => action.mutate('resume')} disabled={action.isPending}>Resume</Button>}
           {phase && phase !== 'finished' && <Button kind="danger" disabled={action.isPending} onClick={() => { if (confirm('Cancel this project? The running task is stopped and its partial work discarded; committed tasks stay on the branch.')) action.mutate('cancel'); }}>Cancel</Button>}
@@ -75,6 +91,15 @@ export function ProjectPage({ route }: { route: ProjectRoute }) {
       {route.tab === 'tasks' && <TasksView p={p} events={events.data ?? []} selected={route.task} onSelect={id => setTab('tasks', id)} />}
       {route.tab === 'activity' && <ActivityView events={events.data ?? []} onTask={id => setTab('tasks', id)} />}
       {route.tab === 'report' && <ReportView id={p.id} />}
+
+      <PlanApprovalModal
+        open={planModalOpen}
+        onOpenChange={setPlanModalOpen}
+        projectId={p.id}
+        planContent={planQuery.data}
+        backlog={p.backlog}
+        onApproved={() => qc.invalidateQueries({ queryKey: ['project', p.id] })}
+      />
     </div>
   );
 }
@@ -375,7 +400,17 @@ function Artifacts({ projectId, taskId }: { projectId: string; taskId: string })
         ))}
       </div>
       <ErrorNote error={content.error} />
-      {current && content.data !== undefined && <CodeView name={current} text={content.data} />}
+      {current && content.data !== undefined && (
+        (current.endsWith('.patch') || current.endsWith('.diff') || current.startsWith('diff-')) ? (
+          <DiffViewer patch={content.data} fileName={current} />
+        ) : current.endsWith('.md') ? (
+          <div className="rounded-lg border border-line bg-surface p-4 prose prose-sm dark:prose-invert max-w-none text-xs leading-relaxed overflow-x-auto">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{content.data}</ReactMarkdown>
+          </div>
+        ) : (
+          <CodeView name={current} text={content.data} />
+        )
+      )}
     </Card>
   );
 }
@@ -393,5 +428,13 @@ function ActivityView({ events, onTask }: { events: ProjectEvent[]; onTask: (id:
 function ReportView({ id }: { id: string }) {
   const report = useQuery({ queryKey: ['report', id], queryFn: () => api.projectFile(id, 'report.md'), retry: false });
   if (report.error) return <Empty title="No report yet">The report is written when a build run finishes.</Empty>;
-  return <Card title="report.md">{report.data !== undefined ? <CodeView name="report.md" text={report.data} /> : 'Loading…'}</Card>;
+  return (
+    <Card title="report.md">
+      {report.data !== undefined ? (
+        <div className="prose prose-sm dark:prose-invert max-w-none text-xs leading-relaxed overflow-x-auto">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{report.data}</ReactMarkdown>
+        </div>
+      ) : 'Loading…'}
+    </Card>
+  );
 }

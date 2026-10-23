@@ -7,5 +7,6 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   // Plain JS modules run under Node (TypeScript files get globals from @types/node).
   { files: ['**/*.mjs'], languageOptions: { globals: { process: 'readonly', setTimeout: 'readonly', clearTimeout: 'readonly', console: 'readonly' } } },
+  { files: ['desktop/**/*.cjs'], languageOptions: { globals: { require: 'readonly', process: 'readonly', __dirname: 'readonly', console: 'readonly' } }, rules: { '@typescript-eslint/no-require-imports': 'off' } },
   { rules: { '@typescript-eslint/no-unused-vars': ['error', { varsIgnorePattern: '^_', argsIgnorePattern: '^_' }] } },
 );

@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import OpenAI from 'openai';
 import { z } from 'zod';
 import type { Mount } from './container.js';
 import type { AgentCredentials } from './credentials.js';
@@ -159,4 +160,72 @@ export class CodexReviewer implements Agent {
     await writeFile(join(outDir, `${phase}.json`), output);
     return { output, usage: codexUsage(result.stdout) };
   }
+}
+
+export interface OpenAICompatibleOptions {
+  model: string;
+  baseURL?: string;
+  apiKey?: string;
+  timeoutMs?: number;
+  systemPrompt?: string;
+  jsonSchema?: Record<string, unknown>;
+  temperature?: number;
+}
+
+/**
+ * Generic agent for any OpenAI-compatible endpoint, including Google Gemini,
+ * DeepSeek, Anthropic, or Ollama routed through the local LiteLLM gateway.
+ */
+export class OpenAICompatibleAgent implements Agent {
+  private client: OpenAI;
+
+  constructor(private opts: OpenAICompatibleOptions) {
+    this.client = new OpenAI({
+      apiKey: opts.apiKey || process.env.LITELLM_MASTER_KEY || process.env.OPENAI_API_KEY || 'dummy-key',
+      baseURL: opts.baseURL || process.env.LITELLM_BASE_URL || 'http://localhost:4000/v1',
+      timeout: opts.timeoutMs ?? 120_000,
+    });
+  }
+
+  async run(prompt: string, _cwd: string, outDir: string, phase: string): Promise<AgentResult> {
+    const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
+    if (this.opts.systemPrompt) {
+      messages.push({ role: 'system', content: this.opts.systemPrompt });
+    }
+    messages.push({ role: 'user', content: prompt });
+
+    try {
+      const response = await this.client.chat.completions.create({
+        model: this.opts.model,
+        messages,
+        temperature: this.opts.temperature ?? 0.2,
+        response_format: this.opts.jsonSchema ? { type: 'json_object' } : undefined,
+      });
+
+      const choice = response.choices[0];
+      const output = choice?.message?.content ?? '';
+      if (!output.trim()) {
+        throw new AgentError(`Model ${this.opts.model} returned empty response`);
+      }
+
+      const ext = this.opts.jsonSchema ? 'json' : 'md';
+      await writeFile(join(outDir, `${phase}.${ext}`), output);
+
+      const usage: Usage | undefined = response.usage ? {
+        inputTokens: response.usage.prompt_tokens,
+        outputTokens: response.usage.completion_tokens,
+      } : undefined;
+
+      return { output, usage };
+    } catch (error) {
+      if (error instanceof Error && isRateLimitMessage(error.message)) {
+        throw new RateLimitedError(`${this.opts.model} was rate limited: ${error.message}`);
+      }
+      throw error instanceof AgentError ? error : new AgentError(`OpenAICompatibleAgent error (${this.opts.model}): ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+}
+
+export function createOpenAICompatibleAgent(opts: OpenAICompatibleOptions): Agent {
+  return new OpenAICompatibleAgent(opts);
 }
