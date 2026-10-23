@@ -21,18 +21,58 @@ function createWindow() {
   });
 
   const isDev = process.argv.includes('--dev') || process.env.NODE_ENV === 'development';
+  const targetURL = isDev ? 'http://127.0.0.1:5173' : (process.env.AGENTIC_API_URL || 'http://127.0.0.1:8787');
 
   if (isDev) {
-    mainWindow.loadURL('http://localhost:5173');
     mainWindow.webContents.openDevTools({ mode: 'detach' });
-  } else {
-    const indexPath = path.join(__dirname, '../web/dist/index.html');
-    if (fs.existsSync(indexPath)) {
-      mainWindow.loadFile(indexPath);
-    } else {
-      mainWindow.loadURL('http://localhost:8787');
-    }
   }
+
+  function loadApp() {
+    if (!mainWindow) return;
+    mainWindow.loadURL(targetURL).catch((err) => {
+      console.warn(`[Desktop] Cannot connect to ${targetURL} (${err.message}). Showing connection screen...`);
+      const retryHtml = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <title>Agent Orchestrator - Connecting</title>
+          <style>
+            body { background: #0d0d0d; color: #f5f5f5; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; text-align: center; }
+            .card { background: #18181b; border: 1px solid #27272a; border-radius: 12px; padding: 32px 40px; max-width: 480px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }
+            h1 { font-size: 20px; font-weight: 600; margin: 0 0 12px; color: #fff; }
+            p { font-size: 14px; color: #a1a1aa; line-height: 1.5; margin: 0 0 20px; }
+            code { background: #27272a; color: #38bdf8; padding: 3px 6px; border-radius: 4px; font-family: monospace; font-size: 13px; }
+            .spinner { width: 32px; height: 32px; border: 3px solid #27272a; border-top-color: #38bdf8; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 20px; }
+            @keyframes spin { to { transform: rotate(360deg); } }
+            button { background: #2563eb; color: #fff; border: none; padding: 8px 18px; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer; transition: background 0.15s; }
+            button:hover { background: #1d4ed8; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <div class="spinner"></div>
+            <h1>Connecting to Agent Orchestrator</h1>
+            <p>Waiting for the backend server at <code>${targetURL}</code>...</p>
+            <p style="font-size: 12px; color: #71717a;">Make sure the API server is running with:<br><code>npm run api</code></p>
+            <button onclick="location.reload()">Retry Connection</button>
+          </div>
+          <script>
+            setTimeout(() => { location.reload(); }, 2500);
+          </script>
+        </body>
+        </html>
+      `;
+      mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(retryHtml)}`);
+      setTimeout(() => {
+        if (mainWindow) {
+          mainWindow.loadURL(targetURL).catch(() => {});
+        }
+      }, 3000);
+    });
+  }
+
+  loadApp();
 
   mainWindow.on('closed', () => {
     mainWindow = null;
