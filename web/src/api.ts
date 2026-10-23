@@ -32,9 +32,14 @@ export const setToken = (token: string) => { try { localStorage.setItem(TOKEN_KE
 
 export class ApiError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 
+export const API_BASE = (typeof window !== 'undefined' && (window.location.protocol === 'file:' || window.location.origin === 'null'))
+  ? 'http://127.0.0.1:8787'
+  : '';
+
 async function request<T>(path: string, init: RequestInit = {}, as: 'json' | 'text' = 'json'): Promise<T> {
   const token = getToken();
-  const res = await fetch(path, { ...init, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...init.headers } });
+  const url = path.startsWith('http') ? path : `${API_BASE}${path}`;
+  const res = await fetch(url, { ...init, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...init.headers } });
   if (!res.ok) {
     const body = await res.text();
     let message = body;
@@ -71,7 +76,7 @@ export function useLiveEvents(projectId?: string): boolean {
   useEffect(() => {
     const token = getToken();
     const params = new URLSearchParams({ ...(projectId ? { project: projectId } : {}), ...(token ? { token } : {}) });
-    const source = new EventSource(`/api/stream?${params}`);
+    const source = new EventSource(`${API_BASE}/api/stream?${params}`);
     let timer: ReturnType<typeof setTimeout> | undefined;
     source.onopen = () => setConnected(true);
     source.onerror = () => setConnected(false);
