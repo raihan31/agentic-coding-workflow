@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
-import { StrictMode, useState } from 'react';
+import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { api, ApiError, setToken } from './api';
 import { Button, Link } from './components';
@@ -27,23 +27,61 @@ function TokenGate() {
 
 function App() {
   const route = useRoute();
-  const health = useQuery({ queryKey: ['health'], queryFn: api.health, refetchInterval: 30_000 });
+  const health = useQuery({ queryKey: ['health'], queryFn: api.health, refetchInterval: 15_000 });
   const authFailed = useQuery({ queryKey: ['projects'], queryFn: api.projects, enabled: false }).error;
+
+  const isDesktop = typeof window !== 'undefined' && Boolean(window.desktopAPI?.isDesktop);
+  const isMac = typeof window !== 'undefined' && window.desktopAPI?.platform === 'darwin';
+
+  // Prevent accidental drop events outside dropzones from navigating the Electron window away
+  useEffect(() => {
+    const prevent = (e: DragEvent) => {
+      if (!(e.target as HTMLElement)?.closest?.('label[for="document"]')) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('dragover', prevent);
+    window.addEventListener('drop', prevent);
+    return () => {
+      window.removeEventListener('dragover', prevent);
+      window.removeEventListener('drop', prevent);
+    };
+  }, []);
+
   if (authFailed instanceof ApiError && authFailed.status === 401) return <TokenGate />;
+
   return (
     <div className="min-h-screen">
-      <header className="border-b border-line bg-surface">
-        <div className="mx-auto flex max-w-7xl items-center gap-6 px-4 py-3 sm:px-6">
-          <Link to={{ name: 'projects' }} className="flex items-center gap-2 text-sm font-semibold text-ink">
-            <span aria-hidden className="grid h-6 w-6 place-items-center rounded-md bg-accent text-xs text-accent-ink">AO</span>
-            Agent Orchestrator
-          </Link>
-          <nav className="flex gap-4 text-sm">
-            <Link to={{ name: 'projects' }} className={route.name !== 'new' ? 'text-ink' : 'text-ink-2 hover:text-ink'}>Projects</Link>
-            <Link to={{ name: 'new' }} className={route.name === 'new' ? 'text-ink' : 'text-ink-2 hover:text-ink'}>New project</Link>
-          </nav>
-          <div className="ml-auto text-xs text-ink-2">
-            {health.data && !health.data.temporal && <span title="Start the stack and restart the API"><span className="text-warn" aria-hidden>◷ </span>Temporal offline: read-only</span>}
+      <header
+        className={`border-b border-line bg-surface select-none ${isMac ? 'pt-1.5' : ''}`}
+        style={isDesktop ? ({ WebkitAppRegion: 'drag' } as React.CSSProperties) : undefined}
+      >
+        <div className={`mx-auto flex max-w-7xl items-center gap-6 px-4 py-2.5 sm:px-6 ${isMac ? 'pl-20' : ''}`}>
+          <div style={isDesktop ? ({ WebkitAppRegion: 'no-drag' } as React.CSSProperties) : undefined} className="flex items-center gap-6">
+            <Link to={{ name: 'projects' }} className="flex items-center gap-2 text-sm font-semibold text-ink">
+              <span aria-hidden className="grid h-6 w-6 place-items-center rounded-md bg-accent text-xs text-accent-ink">AO</span>
+              Agent Orchestrator
+            </Link>
+            <nav className="flex gap-4 text-sm">
+              <Link to={{ name: 'projects' }} className={route.name !== 'new' ? 'text-ink' : 'text-ink-2 hover:text-ink'}>Projects</Link>
+              <Link to={{ name: 'new' }} className={route.name === 'new' ? 'text-ink' : 'text-ink-2 hover:text-ink'}>New project</Link>
+            </nav>
+          </div>
+          <div
+            style={isDesktop ? ({ WebkitAppRegion: 'no-drag' } as React.CSSProperties) : undefined}
+            className="ml-auto flex items-center gap-3 text-xs text-ink-2"
+          >
+            {health.isError && (
+              <span className="flex items-center gap-1.5 rounded bg-critical/10 px-2 py-0.5 text-xs font-medium text-critical" title="Cannot reach Fastify API server at http://127.0.0.1:8787. Make sure 'npm run api' is running.">
+                <span aria-hidden className="inline-block h-2 w-2 rounded-full bg-critical animate-pulse" />
+                API Offline
+              </span>
+            )}
+            {health.data && !health.data.temporal && (
+              <span title="Start the stack and restart the API">
+                <span className="text-warn" aria-hidden>◷ </span>Temporal offline: read-only
+              </span>
+            )}
           </div>
         </div>
       </header>

@@ -32,9 +32,14 @@ export const setToken = (token: string) => { try { localStorage.setItem(TOKEN_KE
 
 export class ApiError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 
+export const API_BASE = (typeof window !== 'undefined' && (window.location.protocol === 'file:' || window.location.origin === 'null'))
+  ? 'http://127.0.0.1:8787'
+  : '';
+
 async function request<T>(path: string, init: RequestInit = {}, as: 'json' | 'text' = 'json'): Promise<T> {
   const token = getToken();
-  const res = await fetch(path, { ...init, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...init.headers } });
+  const url = path.startsWith('http') ? path : `${API_BASE}${path}`;
+  const res = await fetch(url, { ...init, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...init.headers } });
   if (!res.ok) {
     const body = await res.text();
     let message = body;
@@ -71,13 +76,25 @@ export function useLiveEvents(projectId?: string): boolean {
   useEffect(() => {
     const token = getToken();
     const params = new URLSearchParams({ ...(projectId ? { project: projectId } : {}), ...(token ? { token } : {}) });
-    const source = new EventSource(`/api/stream?${params}`);
+    const source = new EventSource(`${API_BASE}/api/stream?${params}`);
     let timer: ReturnType<typeof setTimeout> | undefined;
     source.onopen = () => setConnected(true);
     source.onerror = () => setConnected(false);
     source.onmessage = msg => {
       const event = JSON.parse(msg.data) as ProjectEvent;
       qc.setQueryData<ProjectEvent[]>(['events', event.projectId], old => old && !old.some(e => e.id === event.id) ? [...old, event] : old);
+
+      // Native desktop notifications
+      if (typeof window !== 'undefined' && window.desktopAPI?.sendNotification) {
+        if (event.type === 'backlog.ready' || event.type === 'backlog.approved') {
+          window.desktopAPI.sendNotification('Orchestrator Update', `Project ${event.projectId}: Backlog status updated`);
+        } else if (event.type === 'project.completed') {
+          window.desktopAPI.sendNotification('Project Completed', `Project ${event.projectId} successfully finished!`);
+        } else if (event.type === 'task.failed' || event.type === 'needs_attention') {
+          window.desktopAPI.sendNotification('Action Needed', `Task in project ${event.projectId} needs your input`);
+        }
+      }
+
       clearTimeout(timer);
       timer = setTimeout(() => {
         void qc.invalidateQueries({ queryKey: ['project', event.projectId] });

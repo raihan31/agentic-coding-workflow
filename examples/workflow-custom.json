@@ -1,0 +1,44 @@
+{
+  "maxRepairs": 2,
+  "agentRuntime": {
+    "type": "container"
+  },
+  "credentials": {
+    "mode": "subscription"
+  },
+  "project": {
+    "maxConcurrency": 2,
+    "maxTasks": 25
+  },
+  "checkRunner": {
+    "type": "container",
+    "image": "node:22-bookworm-slim"
+  },
+  "checks": [
+    [
+      "npm",
+      "run",
+      "typecheck"
+    ]
+  ],
+  "protectedPaths": [
+    "package.json",
+    "package-lock.json",
+    "tsconfig.json",
+    ".github/**"
+  ],
+  "models": {
+    "planner": "claude-3-7-sonnet",
+    "developer": "codex",
+    "reviewer": "codex"
+  },
+  "plannerBudgetUsd": 5,
+  "security": {
+    "scanners": [],
+    "failOn": "high"
+  },
+  "manager": {
+    "enabled": true,
+    "maxInterventions": 2
+  }
+}

@@ -163,6 +163,8 @@ export const ConfigSchema = z.object({
   /** Hard USD cap for the Claude analyst call that turns a document into a backlog. */
   analystBudgetUsd: z.number().positive().optional(),
   project: z.object({
+    /** Number of DAG-independent tasks allowed to execute concurrently. Defaults to 1 (sequential). */
+    maxConcurrency: z.number().int().min(1).max(10).default(1),
     /** Upper bound on backlog size; larger documents should be split. */
     maxTasks: z.number().int().min(1).max(200).default(40),
     /** Identity for the per-task commits on the project branch. */
