@@ -1,0 +1,250 @@
+{
+  "id": "agenticEvents01",
+  "name": "Agentic orchestrator: events",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": [],
+  "nodes": [
+    {
+      "id": "n1",
+      "name": "Agentic event",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "5b0f6a52-6a3e-4d55-9e0a-0a6e7c100001",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agentic-events",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "n2",
+      "name": "Verify signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Verifies the orchestrator's HMAC signature (x-agentic-signature over \"<timestamp>.<body>\") and classifies the event.\nconst crypto = require('crypto');\nconst secret = $env.AGENTIC_WEBHOOK_SECRET;\nreturn $input.all().map(item => {\n  const headers = item.json.headers ?? {};\n  const body = item.json.body ?? {};\n  const timestamp = String(headers['x-agentic-timestamp'] ?? '');\n  const given = String(headers['x-agentic-signature'] ?? '');\n  const expected = 'sha256=' + crypto.createHmac('sha256', secret ?? '').update(`${timestamp}.${JSON.stringify(body)}`).digest('hex');\n  const fresh = /^\\d+$/.test(timestamp) && Math.abs(Date.now() / 1000 - Number(timestamp)) < 300;\n  const valid = Boolean(secret) && fresh && given.length === expected.length && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected));\n  const status = body.data?.status;\n  const needsHuman = body.type === 'task.escalated' || (body.type === 'project.status' && ['needs_answers', 'needs_attention', 'backlog_ready'].includes(status));\n  const what = body.type === 'task.escalated' ? `${body.taskId} needs your input: ${body.data?.question}`\n    : body.type === 'project.status' ? `Project is ${String(status).replace(/_/g, ' ')}${body.data?.error ? `: ${body.data.error}` : ''}`\n    : body.type === 'manager.decision' ? `${body.taskId}: manager decided to ${body.data?.decision}: ${body.data?.rationale}`\n    : body.type;\n  return { json: { valid, needsHuman, type: body.type, projectId: body.projectId, taskId: body.taskId ?? null, status: status ?? null,\n    message: `[${body.projectId}] ${what}`, link: body.links?.project ?? null } };\n});"
+      }
+    },
+    {
+      "id": "n3",
+      "name": "Signature valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "n3-c",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "n4",
+      "name": "Needs a human?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        660,
+        -100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "n4-c",
+              "leftValue": "={{ $json.needsHuman }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "n5",
+      "name": "Notify a human",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        880,
+        -200
+      ],
+      "notes": "Replace with Slack, Teams, email or a ticket. Use {{ $json.message }} and {{ $json.link }}; approve or answer from the UI or POST /api/projects/:id/approve.",
+      "notesInFlow": true,
+      "parameters": {}
+    },
+    {
+      "id": "n6",
+      "name": "Record / announce",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        880,
+        0
+      ],
+      "notes": "Replace with a channel post, metrics or a log sink.",
+      "notesInFlow": true,
+      "parameters": {}
+    },
+    {
+      "id": "n7",
+      "name": "Accepted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1100,
+        -100
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"ok\": true } }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "n8",
+      "name": "Bad signature",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        120
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"error\": \"invalid or expired signature\" } }}",
+        "options": {
+          "responseCode": 401
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Agentic event": {
+      "main": [
+        [
+          {
+            "node": "Verify signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify signature": {
+      "main": [
+        [
+          {
+            "node": "Signature valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature valid?": {
+      "main": [
+        [
+          {
+            "node": "Needs a human?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Bad signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs a human?": {
+      "main": [
+        [
+          {
+            "node": "Notify a human",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record / announce",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify a human": {
+      "main": [
+        [
+          {
+            "node": "Accepted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record / announce": {
+      "main": [
+        [
+          {
+            "node": "Accepted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

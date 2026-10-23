@@ -1,0 +1,14 @@
+{{- $k8s := dict "volume" (dict "claimName" (include "agentic.claim" .) "mountPath" .Values.persistence.mountPath) "proxy" (include "agentic.egressUrl" .) "serviceAccountName" (printf "%s-sandbox" .Release.Name) "imagePullSecrets" .Values.imagePullSecrets "nodeSelector" .Values.sandbox.nodeSelector -}}
+{{- if .Values.sandbox.runtimeClassName }}{{- $_ := set $k8s "runtimeClassName" .Values.sandbox.runtimeClassName }}{{- end }}
+{{- $base := dict
+  "agentRuntime" (dict "type" "kubernetes" "image" .Values.agentImage "memory" .Values.sandbox.agent.memory "cpu" .Values.sandbox.agent.cpu)
+  "checkRunner" (dict "type" "kubernetes" "image" .Values.checkImage "memory" .Values.sandbox.check.memory "cpu" .Values.sandbox.check.cpu)
+  "kubernetes" $k8s -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+  labels: {{- include "agentic.labels" . | nindent 4 }}
+data:
+  config.json: |
+    {{- mergeOverwrite (deepCopy .Values.workflowConfig) $base | toPrettyJson | nindent 4 }}

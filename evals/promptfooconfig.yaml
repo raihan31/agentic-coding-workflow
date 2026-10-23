@@ -1,0 +1,68 @@
+# Agent evals: real agents, production prompts and parsers, fixture repos with known answers.
+# Run: npm run eval        (costs real LLM usage; about $1-2 per full run)
+# View: npm run eval:view
+description: Agentic orchestrator agent evals
+providers:
+  - id: file://provider.mjs
+    config:
+      timeoutMs: 1800000
+prompts:
+  - '{{case}}'
+evaluateOptions:
+  maxConcurrency: 2
+  cache: false
+defaultTest:
+  options:
+    # Every case prints {"ok": boolean, "result"?: ..., "error"?: string}.
+    transform: JSON.parse(output)
+tests:
+  - description: reviewer rejects a SQL injection with a high-severity finding
+    vars: { case: reviewer-sql-injection }
+    assert:
+      - type: javascript
+        value: |
+          if (!output.ok) return { pass: false, score: 0, reason: output.error };
+          const r = output.result;
+          const hit = r.findings.find(f => ['critical', 'high'].includes(f.severity) && /inject|parameteri[sz]|placeholder|bind|interpolat|concatenat|OR 1=1|prepare\([^)]*\?/i.test(`${f.explanation} ${f.recommendation}`));
+          return { pass: r.decision === 'changes_required' && Boolean(hit), score: hit ? 1 : 0, reason: `${r.decision}: ${r.summary}` };
+
+  - description: reviewer passes a clean, tested implementation
+    vars: { case: reviewer-clean }
+    assert:
+      - type: javascript
+        value: |
+          if (!output.ok) return { pass: false, score: 0, reason: output.error };
+          const r = output.result;
+          return { pass: r.decision === 'pass', score: r.decision === 'pass' ? 1 : 0, reason: `${r.decision}: ${r.summary}` };
+
+  - description: manager diagnoses a fixable failure and retries with the right guidance
+    vars: { case: manager-diagnosable }
+    assert:
+      - type: javascript
+        value: |
+          if (!output.ok) return { pass: false, score: 0, reason: output.error };
+          const d = output.result;
+          const right = d.decision === 'retry' && /normali[sz]e|NFD|NFKD|diacritic|accent|combining/i.test(d.guidance ?? '');
+          return { pass: right, score: right ? 1 : 0, reason: `${d.decision}: ${d.rationale.slice(0, 300)}` };
+
+  - description: manager escalates an unanswerable product question instead of guessing
+    vars: { case: manager-ambiguous }
+    assert:
+      - type: javascript
+        value: |
+          if (!output.ok) return { pass: false, score: 0, reason: output.error };
+          const d = output.result;
+          const right = d.decision === 'escalate' && /round/i.test(d.question ?? '');
+          return { pass: right, score: right ? 1 : 0, reason: `${d.decision}: ${d.question ?? d.rationale}` };
+
+  - description: analyst turns the sample PRD into a valid backlog covering every requirement
+    vars: { case: analyst-sample-prd }
+    assert:
+      - type: javascript
+        value: |
+          if (!output.ok) return { pass: false, score: 0, reason: output.error };
+          const b = output.result;
+          const titles = b.requirements.map(r => `${r.title} ${r.description}`).join(' ').toLowerCase();
+          const found = ['slug', 'truncat', 'word', 'index'].filter(k => titles.includes(k));
+          const ok = found.length === 4 && b.tasks.length >= 2 && b.tasks.length <= 10;
+          return { pass: ok, score: found.length / 4, reason: `${b.requirements.length} requirements, ${b.tasks.length} tasks; covers ${found.join(', ')}` };

@@ -1,0 +1,6 @@
+node_modules/
+runs/
+*.log
+.DS_Store
+web/dist/
+uploads/

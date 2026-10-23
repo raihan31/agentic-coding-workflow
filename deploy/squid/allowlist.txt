@@ -1,0 +1,7 @@
+# Domains agents may reach (leading dot = include subdomains). Gateway mode needs none of these
+# for model traffic (agents talk to agentic-litellm directly); subscription mode needs the providers.
+.anthropic.com
+.claude.ai
+.claude.com
+.openai.com
+.chatgpt.com

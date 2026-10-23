@@ -1,0 +1,174 @@
+{
+  "type": "object",
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "What the project is, in two or three sentences"
+    },
+    "requirements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable ID such as REQ-001"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "functional",
+              "non_functional",
+              "constraint"
+            ]
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "must",
+              "should",
+              "could",
+              "wont"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "description": "Where in the document this comes from: section heading or short quote"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "description",
+          "type",
+          "priority",
+          "source"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable ID such as T-001"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "description": "What to build, precise enough for an engineer who has not read the document"
+          },
+          "requirementIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "dependsOn": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "IDs of tasks that must be completed first"
+          },
+          "acceptanceCriteria": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Observable, testable conditions"
+          },
+          "size": {
+            "type": "string",
+            "enum": [
+              "S",
+              "M",
+              "L"
+            ]
+          },
+          "risk": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "description",
+          "requirementIds",
+          "dependsOn",
+          "acceptanceCriteria",
+          "size",
+          "risk"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "openQuestions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable ID such as Q-001"
+          },
+          "question": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string",
+            "description": "Why it matters and what the analyst assumed meanwhile"
+          },
+          "blocking": {
+            "type": "boolean",
+            "description": "True if implementation would differ materially depending on the answer"
+          },
+          "requirementIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "question",
+          "context",
+          "blocking",
+          "requirementIds"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "outOfScope": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "summary",
+    "requirements",
+    "tasks",
+    "openQuestions",
+    "outOfScope"
+  ],
+  "additionalProperties": false
+}

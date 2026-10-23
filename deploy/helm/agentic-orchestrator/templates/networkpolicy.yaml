@@ -1,0 +1,47 @@
+{{- $dns := list (dict "to" (list (dict "namespaceSelector" (dict) "podSelector" (dict "matchLabels" (dict "k8s-app" "kube-dns")))) "ports" (list (dict "protocol" "UDP" "port" 53) (dict "protocol" "TCP" "port" 53))) -}}
+{{- $toProxy := dict "to" (list (dict "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/instance" .Release.Name "app.kubernetes.io/component" "egress")))) "ports" (list (dict "protocol" "TCP" "port" 3128)) -}}
+# Agents: no inbound traffic; outbound only DNS and the egress proxy (which allows only the allowlisted domains).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-sandbox-agent
+  labels: {{- include "agentic.labels" . | nindent 4 }}
+spec:
+  podSelector: { matchLabels: { agentic.dev/sandbox: agent } }
+  policyTypes: [Ingress, Egress]
+  egress: {{- toYaml (append $dns $toProxy) | nindent 4 }}
+---
+# Dependency installs before checks: same as agents.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-sandbox-check-setup
+  labels: {{- include "agentic.labels" . | nindent 4 }}
+spec:
+  podSelector: { matchLabels: { agentic.dev/sandbox: check-setup } }
+  policyTypes: [Ingress, Egress]
+  egress: {{- toYaml (append $dns $toProxy) | nindent 4 }}
+---
+# Checks run agent-written code: no network at all.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-sandbox-check
+  labels: {{- include "agentic.labels" . | nindent 4 }}
+spec:
+  podSelector: { matchLabels: { agentic.dev/sandbox: check } }
+  policyTypes: [Ingress, Egress]
+---
+# The proxy accepts connections only from sandbox pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-egress
+  labels: {{- include "agentic.labels" . | nindent 4 }}
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: egress } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchExpressions: [{ key: agentic.dev/sandbox, operator: In, values: [agent, check-setup] }] }
+      ports: [{ protocol: TCP, port: 3128 }]

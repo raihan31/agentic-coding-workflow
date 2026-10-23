@@ -1,0 +1,54 @@
+{
+  "maxRepairs": 2,
+  "agentRuntime": {
+    "type": "container"
+  },
+  "credentials": {
+    "mode": "subscription"
+  },
+  "checkRunner": {
+    "type": "container",
+    "image": "node:22-bookworm-slim",
+    "setup": [
+      [
+        "npm",
+        "ci",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund"
+      ]
+    ]
+  },
+  "checks": [
+    [
+      "npm",
+      "run",
+      "typecheck"
+    ],
+    [
+      "npm",
+      "test"
+    ]
+  ],
+  "protectedPaths": [
+    "package.json",
+    "package-lock.json",
+    "tsconfig.json",
+    ".github/**",
+    "tests/**"
+  ],
+  "models": {},
+  "plannerBudgetUsd": 5,
+  "security": {
+    "scanners": [
+      "gitleaks",
+      "semgrep",
+      "osv"
+    ],
+    "failOn": "high"
+  },
+  "manager": {
+    "enabled": true,
+    "maxInterventions": 2
+  }
+}

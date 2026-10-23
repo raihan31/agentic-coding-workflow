@@ -1,0 +1,8 @@
+node_modules
+web/node_modules
+web/dist
+runs
+uploads
+.git
+*.log
+deploy/helm

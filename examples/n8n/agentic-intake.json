@@ -1,0 +1,99 @@
+{
+  "id": "agenticIntake01",
+  "name": "Agentic orchestrator: document intake",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": [],
+  "nodes": [
+    {
+      "id": "i1",
+      "name": "New requirements document",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "5b0f6a52-6a3e-4d55-9e0a-0a6e7c100002",
+      "notes": "POST {repo, name, content, encoding?}. Protect this webhook (Header Auth credential or a private network) before exposing n8n.",
+      "notesInFlow": true,
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agentic-intake",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "i2",
+      "name": "Create project",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AGENTIC_API_URL }}/api/projects",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "authorization",
+              "value": "=Bearer {{ $env.AGENTIC_API_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ repo: $json.body.repo, document: { name: $json.body.name, content: $json.body.content, encoding: $json.body.encoding || 'utf8' } }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "i3",
+      "name": "Project created",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"id\": $json.id } }}",
+        "options": {
+          "responseCode": 201
+        }
+      }
+    }
+  ],
+  "connections": {
+    "New requirements document": {
+      "main": [
+        [
+          {
+            "node": "Create project",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create project": {
+      "main": [
+        [
+          {
+            "node": "Project created",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

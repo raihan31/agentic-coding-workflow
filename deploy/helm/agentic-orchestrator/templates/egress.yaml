@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-egress
+  labels: {{- include "agentic.labels" . | nindent 4 }}
+data:
+  allowlist.txt: |
+    {{- range .Values.egress.allowlist }}
+    {{ . }}
+    {{- end }}
+  squid.conf: |
+    # HTTPS CONNECT to allowlisted domains only.
+    http_port 3128
+    acl allowlist dstdomain "/etc/squid/allowlist.txt"
+    acl SSL_ports port 443
+    acl CONNECT method CONNECT
+    http_access deny CONNECT !SSL_ports
+    http_access deny !allowlist
+    http_access allow allowlist
+    http_access deny all
+    cache deny all
+    # Squid drops privileges and cannot write the container's stdout; audit with:
+    #   kubectl exec deploy/<release>-egress -- tail -f /var/log/squid/access.log
+    access_log /var/log/squid/access.log squid
+    cache_log /var/log/squid/cache.log
+    pid_filename none
+    shutdown_lifetime 1 seconds
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-egress
+  labels: {{- include "agentic.labels" . | nindent 4 }}
+    app.kubernetes.io/component: egress
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: egress }
+  template:
+    metadata:
+      labels: {{- include "agentic.labels" . | nindent 8 }}
+        app.kubernetes.io/component: egress
+      annotations:
+        checksum/allowlist: {{ toJson .Values.egress.allowlist | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: squid
+          image: {{ .Values.egress.image }}
+          ports: [{ name: proxy, containerPort: 3128 }]
+          readinessProbe: { tcpSocket: { port: proxy }, periodSeconds: 10 }
+          volumeMounts:
+            - { name: conf, mountPath: /etc/squid/squid.conf, subPath: squid.conf }
+            - { name: conf, mountPath: /etc/squid/allowlist.txt, subPath: allowlist.txt }
+            - { name: logs, mountPath: /var/log/squid }
+          resources: { requests: { memory: 64Mi, cpu: 50m }, limits: { memory: 256Mi } }
+      volumes:
+        - name: conf
+          configMap: { name: {{ .Release.Name }}-egress }
+        - name: logs
+          emptyDir: { sizeLimit: 1Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-egress
+  labels: {{- include "agentic.labels" . | nindent 4 }}
+spec:
+  selector: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: egress }
+  ports: [{ name: proxy, port: 3128, targetPort: proxy }]

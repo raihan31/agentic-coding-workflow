@@ -1,0 +1,60 @@
+{
+  "type": "object",
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": [
+        "retry",
+        "split",
+        "escalate",
+        "skip"
+      ]
+    },
+    "rationale": {
+      "type": "string",
+      "description": "Root cause of the failure and why this decision fixes it"
+    },
+    "guidance": {
+      "description": "retry: concrete instructions for a fresh attempt (approach, root cause, pitfalls)",
+      "type": "string"
+    },
+    "subtasks": {
+      "description": "split: smaller tasks, done in this order",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "description": "What to build, precise enough for an engineer who has not seen the failed attempts"
+          },
+          "acceptanceCriteria": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Observable, testable conditions; together the subtasks must cover every original criterion"
+          }
+        },
+        "required": [
+          "title",
+          "description",
+          "acceptanceCriteria"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "question": {
+      "description": "escalate: one specific question a human must answer",
+      "type": "string"
+    }
+  },
+  "required": [
+    "decision",
+    "rationale"
+  ],
+  "additionalProperties": false
+}

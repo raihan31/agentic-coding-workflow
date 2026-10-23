@@ -1,0 +1,43 @@
+# The worker creates one pod (and, for credentials, one short-lived Secret) per agent call or check.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-worker
+  labels: {{- include "agentic.labels" . | nindent 4 }}
+---
+# Sandbox pods run as this account with its token never mounted: no Kubernetes API access.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-sandbox
+  labels: {{- include "agentic.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-api
+  labels: {{- include "agentic.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-worker
+  labels: {{- include "agentic.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [create, get, list, watch, delete]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-worker
+  labels: {{- include "agentic.labels" . | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ .Release.Name }}-worker }
+subjects:
+  - { kind: ServiceAccount, name: {{ .Release.Name }}-worker, namespace: {{ .Release.Namespace }} }

@@ -1,0 +1,1 @@
+Add a pure TypeScript function `slugify(input: string): string` to src/slugify.ts. Lowercase input, trim outer whitespace, replace sequences of non-alphanumeric ASCII characters with a single hyphen, and remove leading/trailing hyphens. Write tests using the repository's test framework. Do not add runtime dependencies.

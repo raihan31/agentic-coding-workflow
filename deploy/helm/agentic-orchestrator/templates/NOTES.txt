@@ -1,0 +1,10 @@
+Agentic orchestrator {{ .Chart.AppVersion }} installed as "{{ .Release.Name }}".
+
+1. Put repositories on the shared volume under {{ .Values.persistence.mountPath }}/repos (the API only accepts repos there),
+   e.g. a git clone Job, or: kubectl exec deploy/{{ .Release.Name }}-worker -- git clone <url> {{ .Values.persistence.mountPath }}/repos/<name>
+2. Open the UI:  kubectl port-forward svc/{{ .Release.Name }}-api 8787:{{ .Values.api.service.port }}   then http://localhost:8787
+   (enter the AGENTIC_API_TOKEN from secret {{ .Values.credentials.existingSecret }})
+{{- if not .Values.sandbox.runtimeClassName }}
+
+WARNING: sandbox.runtimeClassName is empty, so agent and check pods share the node kernel. Use gVisor or Kata in production.
+{{- end }}

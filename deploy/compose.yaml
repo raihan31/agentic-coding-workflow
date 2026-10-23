@@ -1,0 +1,193 @@
+# Local platform for the orchestrator.
+#   npm run stack:up                      egress proxy, Temporal, Postgres, observability (default)
+#   npm run stack:up:gateway               ...plus the LiteLLM gateway (needs deploy/.env)
+#
+# Networks:
+#   agentic-sandbox  internal (no route out). Agent containers live here and can reach only
+#                    the egress proxy, the gateway and the collector.
+#   egress           has internet access; only the proxy and the gateway join it.
+#   backend          gateway <-> its database, telemetry backends. Agents never join it. (Not internal:
+#                    Docker cannot publish ports from containers that sit only on internal networks.)
+name: agentic
+
+networks:
+  sandbox:
+    name: agentic-sandbox
+    internal: true
+  egress:
+    name: agentic-egress-net
+  backend:
+    name: agentic-backend
+
+volumes:
+  temporal: {}
+  agentic-db: {}
+  litellm-db: {}
+  prometheus: {}
+  grafana: {}
+  n8n: {}
+
+services:
+  egress:
+    image: ubuntu/squid:6.6-24.04_edge
+    container_name: agentic-egress
+    networks: [sandbox, egress]
+    volumes:
+      - ./squid/squid.conf:/etc/squid/squid.conf:ro
+      - ./squid/allowlist.txt:/etc/squid/allowlist.txt:ro
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/3128'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Durable orchestration. Dev server: SQLite persistence + Temporal UI on :8233. Production uses a
+  # Postgres-backed Temporal cluster (Helm), not this.
+  temporal:
+    image: temporalio/temporal:1.9.1
+    container_name: agentic-temporal
+    user: root
+    command: ["server", "start-dev", "--ip", "0.0.0.0", "--db-filename", "/data/temporal.db", "--ui-port", "8233"]
+    networks: [backend]
+    ports: ["127.0.0.1:7233:7233", "127.0.0.1:8233:8233"]
+    volumes:
+      - temporal:/data
+    healthcheck:
+      test: ["CMD-SHELL", "temporal operator cluster health --address 127.0.0.1:7233 | grep -q SERVING"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  # Application state for the API/UI: projects, tasks, events (DATABASE_URL=postgres://agentic:agentic@localhost:55432/agentic).
+  db:
+    image: postgres:17-alpine
+    container_name: agentic-db
+    networks: [backend]
+    ports: ["127.0.0.1:55432:5432"]
+    environment:
+      POSTGRES_USER: agentic
+      POSTGRES_PASSWORD: ${AGENTIC_DB_PASSWORD:-agentic}
+      POSTGRES_DB: agentic
+    volumes:
+      - agentic-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentic"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  litellm:
+    profiles: [gateway]
+    image: ghcr.io/berriai/litellm:v1.102.4
+    container_name: agentic-litellm
+    networks: [sandbox, egress, backend]
+    ports: ["127.0.0.1:4000:4000"]
+    # Refuse to start without a master key: an unauthenticated gateway would spend provider keys with no budget.
+    entrypoint: ["sh", "-c", "test -n \"$$LITELLM_MASTER_KEY\" || { echo 'set LITELLM_MASTER_KEY in deploy/.env' >&2; exit 1; }; exec litellm --config /app/config.yaml --port 4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+      DATABASE_URL: postgresql://litellm:${LITELLM_DB_PASSWORD:-litellm}@agentic-litellm-db:5432/litellm
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      STORE_MODEL_IN_DB: "False"
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+    depends_on:
+      litellm-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+  litellm-db:
+    profiles: [gateway]
+    image: postgres:17-alpine
+    container_name: agentic-litellm-db
+    networks: [backend]
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${LITELLM_DB_PASSWORD:-litellm}
+      POSTGRES_DB: litellm
+    volumes:
+      - litellm-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.160.0
+    container_name: agentic-otel-collector
+    command: ["--config=/etc/otelcol/config.yaml"]
+    networks: [sandbox, backend]
+    ports: ["127.0.0.1:4318:4318", "127.0.0.1:4317:4317"]
+    volumes:
+      - ./otel/collector.yaml:/etc/otelcol/config.yaml:ro
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/jaeger:2.21.0
+    container_name: agentic-jaeger
+    networks: [backend]
+    ports: ["127.0.0.1:16686:16686"]
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    container_name: agentic-prometheus
+    networks: [backend]
+    ports: ["127.0.0.1:9090:9090"]
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus:/prometheus
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.1.8
+    container_name: agentic-grafana
+    networks: [backend]
+    ports: ["127.0.0.1:3000:3000"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana:/var/lib/grafana
+    restart: unless-stopped
+
+  # Optional automation edge (`npm run stack:up:n8n`): receives signed webhooks from the orchestrator
+  # (AGENTIC_WEBHOOK_URLS=http://localhost:5678/webhook/agentic-events) and can create projects through the API.
+  # n8n is fair-code (Sustainable Use License), not OSI open source; check that it fits how you use it.
+  n8n:
+    profiles: [n8n]
+    image: n8nio/n8n:2.42.0
+    container_name: agentic-n8n
+    networks: [backend]
+    ports: ["127.0.0.1:5678:5678"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    environment:
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_SECURE_COOKIE: "false" # plain http on localhost only
+      GENERIC_TIMEZONE: ${TZ:-UTC}
+      # The example workflows verify signatures in a Code node and read these settings from the environment.
+      NODE_FUNCTION_ALLOW_BUILTIN: crypto
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      AGENTIC_WEBHOOK_SECRET: ${AGENTIC_WEBHOOK_SECRET:-}
+      AGENTIC_API_URL: ${AGENTIC_API_URL:-http://host.docker.internal:8787}
+      AGENTIC_API_TOKEN: ${AGENTIC_API_TOKEN:-}
+    volumes:
+      - n8n:/home/node/.n8n
+      - ../examples/n8n:/workflows:ro
+    restart: unless-stopped

@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-worker
+  labels: {{- include "agentic.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: worker }
+  template:
+    metadata:
+      labels: {{- include "agentic.labels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}-worker
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- range . }}
+        - name: {{ . }}{{- end }}
+      {{- end }}
+      # Temporal re-delivers interrupted activities; give running agent calls time to finish on scale-down.
+      terminationGracePeriodSeconds: 120
+      initContainers:
+        - name: dirs
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          command: [sh, -c, "mkdir -p {{ .Values.persistence.mountPath }}/runs {{ .Values.persistence.mountPath }}/repos {{ .Values.persistence.mountPath }}/tmp"]
+          securityContext: {{- include "agentic.containerSecurity" . | nindent 12 }}
+          volumeMounts: [{ name: data, mountPath: {{ .Values.persistence.mountPath }} }]
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [worker, --concurrency, {{ .Values.worker.concurrency | quote }}, --runs-dir, "{{ .Values.persistence.mountPath }}/runs"]
+          env: {{- include "agentic.env" . | nindent 12 }}
+          resources: {{- toYaml .Values.worker.resources | nindent 12 }}
+          securityContext: {{- include "agentic.containerSecurity" . | nindent 12 }}
+          volumeMounts: {{- include "agentic.volumeMounts" . | nindent 12 }}
+      volumes: {{- include "agentic.volumes" . | nindent 8 }}

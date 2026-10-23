@@ -1,0 +1,87 @@
+# Orchestrator image (deploy/orchestrator.Dockerfile) and the sandbox images agents and checks run in.
+image:
+  repository: ghcr.io/your-org/agentic-orchestrator
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+agentImage: ghcr.io/your-org/agentic-agent:0.1.0   # deploy/agent.Dockerfile
+checkImage: node:22-bookworm-slim
+imagePullSecrets: []
+
+# External services. Temporal: e.g. the temporalio/helm-charts chart or Temporal Cloud. Postgres: any managed instance.
+temporal:
+  address: temporal-frontend.temporal:7233
+  namespace: default
+database:
+  existingSecret: agentic-database   # key DATABASE_URL
+  key: DATABASE_URL
+
+# Secret with credentials; every key is optional. Created by you, never by the chart:
+#   CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY), OPENAI_API_KEY, codex-auth.json (a ~/.codex/auth.json),
+#   GITHUB_TOKEN (delivery), AGENTIC_API_TOKEN (required: the API listens on the pod network), AGENTIC_WEBHOOK_SECRET.
+credentials:
+  existingSecret: agentic-credentials
+
+# Shared volume for repositories (/data/repos), project runs (/data/runs) and per-call sandbox I/O.
+# Worker, API and every sandbox pod mount it at the same path, so it must be ReadWriteMany across nodes
+# (Filestore, EFS, Azure Files, CephFS, NFS...). ReadWriteOnce works only on a single node.
+persistence:
+  existingClaim: ""
+  storageClass: ""
+  accessModes: [ReadWriteMany]
+  size: 100Gi
+  mountPath: /data
+
+sandbox:
+  # GKE Sandbox: "gvisor". Other clusters: your gVisor or Kata RuntimeClass. Empty = the default runtime (not recommended).
+  runtimeClassName: gvisor
+  agent: { memory: 4Gi, cpu: "2" }
+  check: { memory: 2Gi, cpu: "2" }
+  nodeSelector: {}
+
+worker:
+  replicas: 1
+  concurrency: 4
+  resources:
+    requests: { memory: 1Gi, cpu: 500m }
+    limits: { memory: 2Gi }
+api:
+  replicas: 1
+  resources:
+    requests: { memory: 256Mi, cpu: 100m }
+    limits: { memory: 1Gi }
+  service: { type: ClusterIP, port: 8787 }
+  ingress:
+    enabled: false
+    className: ""
+    host: agentic.example.com
+    tls: []          # e.g. [{ secretName: agentic-tls, hosts: [agentic.example.com] }]
+    annotations: {}
+
+egress:
+  image: ubuntu/squid:6.6-24.04_edge
+  # Domains agents may reach (leading dot = subdomains). Gateway mode needs only the gateway.
+  allowlist: [.anthropic.com, .claude.ai, .claude.com, .openai.com, .chatgpt.com]
+
+# Defaults for projects created through the API (merged into the generated workflow config).
+workflowConfig:
+  maxRepairs: 2
+  checks: [[npm, test]]
+  security: { scanners: [] }   # in-cluster scanners need a container engine; run them in CI instead
+  manager: { enabled: true }
+
+# Outbound webhooks (n8n, chat-ops). The secret comes from credentials.AGENTIC_WEBHOOK_SECRET.
+webhooks:
+  urls: []
+  events: []
+  publicUrl: ""
+
+# OTLP/HTTP endpoint for orchestrator and agent telemetry (e.g. an in-cluster OpenTelemetry Collector).
+otel:
+  endpoint: ""
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile: { type: RuntimeDefault }
