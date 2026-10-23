@@ -4,3 +4,6 @@ runs/
 .DS_Store
 web/dist/
 uploads/
+graphify-out/cache/
+graphify-out/memory/
+graphify-out/.*
