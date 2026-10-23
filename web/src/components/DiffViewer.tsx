@@ -1,14 +1,21 @@
 import { useState, useEffect } from 'react';
 import { DiffEditor } from '@monaco-editor/react';
-import { Columns2, Rows2, Copy, Check, ExternalLink } from 'lucide-react';
+import { Columns2, Rows2, Copy, Check, ExternalLink, Folder } from 'lucide-react';
 
 export interface DiffViewerProps {
   original?: string;
   modified?: string;
   patch?: string;
   fileName?: string;
+  workspacePath?: string;
   className?: string;
   height?: string;
+}
+
+function extractTargetFileFromPatch(patch?: string): string | undefined {
+  if (!patch) return undefined;
+  const match = patch.match(/\+\+\+\s+[ab]\/(.+)$/m) || patch.match(/diff --git\s+\S+\s+[ab]\/(.+)$/m);
+  return match ? match[1].trim() : undefined;
 }
 
 /**
@@ -84,6 +91,7 @@ export function DiffViewer({
   modified,
   patch,
   fileName,
+  workspacePath,
   className = '',
   height = '480px',
 }: DiffViewerProps) {
@@ -110,7 +118,9 @@ export function DiffViewer({
     mod = parsed.modified;
   }
 
-  const language = detectLanguage(fileName);
+  const targetFile = extractTargetFileFromPatch(patch) || (fileName && !fileName.endsWith('.patch') && !fileName.endsWith('.diff') ? fileName : undefined);
+  const displayFile = targetFile || fileName;
+  const language = detectLanguage(displayFile);
 
   const copyPatch = () => {
     navigator.clipboard.writeText(patch || `${orig}\n---\n${mod}`).then(() => {
@@ -119,11 +129,29 @@ export function DiffViewer({
     });
   };
 
+  const openTargetInEditor = () => {
+    if (!window.desktopAPI) return;
+    const target = targetFile && workspacePath
+      ? `${workspacePath.replace(/\/+$/, '')}/${targetFile}`
+      : (workspacePath || targetFile || fileName);
+    if (target) {
+      void window.desktopAPI.openInEditor(target);
+    }
+  };
+
+  const openWorkspaceFolder = () => {
+    if (!window.desktopAPI || !workspacePath) return;
+    void window.desktopAPI.openPath(workspacePath);
+  };
+
   return (
     <div className={`flex flex-col rounded-md border border-line bg-surface overflow-hidden ${className}`}>
       <div className="flex flex-wrap items-center justify-between border-b border-line bg-raised px-3 py-2 text-xs">
         <div className="flex items-center gap-2 font-mono text-ink">
-          {fileName ? <span className="font-semibold">{fileName}</span> : <span>Diff</span>}
+          {displayFile ? <span className="font-semibold">{displayFile}</span> : <span>Diff</span>}
+          {targetFile && fileName && fileName !== targetFile && (
+            <span className="text-[0.7rem] text-muted font-normal">({fileName})</span>
+          )}
           <span className="rounded bg-page px-1.5 py-0.5 text-[0.7rem] text-muted">{language}</span>
         </div>
 
@@ -148,15 +176,27 @@ export function DiffViewer({
             <span>{copied ? 'Copied' : 'Copy'}</span>
           </button>
 
-          {typeof window !== 'undefined' && Boolean(window.desktopAPI?.isDesktop) && Boolean(fileName) && (
+          {typeof window !== 'undefined' && Boolean(window.desktopAPI?.isDesktop) && (Boolean(displayFile) || Boolean(workspacePath)) && (
             <button
               type="button"
-              onClick={() => window.desktopAPI?.openInEditor(fileName!)}
+              onClick={openTargetInEditor}
               className="inline-flex items-center gap-1 rounded border border-line bg-surface px-2 py-1 text-ink-2 hover:bg-raised transition"
-              title="Open file in VS Code or Cursor"
+              title="Open modified file in VS Code or Cursor"
             >
               <ExternalLink size={13} />
               <span>IDE</span>
+            </button>
+          )}
+
+          {typeof window !== 'undefined' && Boolean(window.desktopAPI?.isDesktop) && Boolean(workspacePath) && (
+            <button
+              type="button"
+              onClick={openWorkspaceFolder}
+              className="inline-flex items-center gap-1 rounded border border-line bg-surface px-2 py-1 text-ink-2 hover:bg-raised transition"
+              title="Open repository folder in Finder"
+            >
+              <Folder size={13} />
+              <span>Finder</span>
             </button>
           )}
         </div>

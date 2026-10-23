@@ -1,8 +1,80 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Notification, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
+// Ensure standard developer CLI tools (git, node) are on PATH when launched as a GUI app on macOS
+if (process.platform === 'darwin') {
+  const extraPaths = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'];
+  const currentPath = process.env.PATH || '';
+  const toAdd = extraPaths.filter(p => !currentPath.includes(p) && fs.existsSync(p));
+  if (toAdd.length > 0) {
+    process.env.PATH = `${toAdd.join(':')}:${currentPath}`;
+  }
+}
+
 let mainWindow = null;
+
+function setupApplicationMenu() {
+  const isMac = process.platform === 'darwin';
+  const template = [
+    ...(isMac ? [{
+      label: app.name,
+      submenu: [
+        { role: 'about' },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' },
+      ],
+    }] : []),
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' },
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
+    {
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' },
+        { role: 'zoom' },
+        ...(isMac ? [
+          { type: 'separator' },
+          { role: 'front' },
+          { type: 'separator' },
+          { role: 'window' },
+        ] : [
+          { role: 'close' },
+        ]),
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -18,6 +90,22 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+
+  // Intercept window open calls to open external URLs in system browser
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http:') || url.startsWith('https:') || url.startsWith('vscode:') || url.startsWith('cursor:')) {
+      shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+
+  // Prevent drag-and-drop from navigating window to dropped files
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith('http://127.0.0.1') && !url.startsWith('http://localhost') && !url.startsWith('data:')) {
+      event.preventDefault();
+      shell.openExternal(url);
+    }
   });
 
   const isDev = process.argv.includes('--dev') || process.env.NODE_ENV === 'development';
@@ -139,10 +227,11 @@ ipcMain.handle('desktop:init-git-repo', async (_event, dirPath) => {
 ipcMain.handle('desktop:open-in-editor', async (_event, { filePath, line = 1, editor = 'vscode' }) => {
   if (!filePath) return false;
   try {
+    const fullPath = path.isAbsolute(filePath) ? filePath : path.resolve(filePath);
     if (editor === 'cursor') {
-      await shell.openExternal(`cursor://file/${filePath}:${line}`);
+      await shell.openExternal(`cursor://file/${encodeURI(fullPath)}:${line}`);
     } else {
-      await shell.openExternal(`vscode://file/${filePath}:${line}`);
+      await shell.openExternal(`vscode://file/${encodeURI(fullPath)}:${line}`);
     }
     return true;
   } catch (err) {
@@ -172,6 +261,7 @@ ipcMain.on('desktop:send-notification', (_event, { title, body }) => {
 // -------------------------------------------------------------
 
 app.whenReady().then(() => {
+  setupApplicationMenu();
   createWindow();
 
   app.on('activate', () => {

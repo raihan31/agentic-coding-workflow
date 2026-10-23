@@ -377,7 +377,7 @@ function TasksView({ p, events, selected, onSelect }: { p: ProjectDetail; events
           </details>
         </Card>
         <Card title="Timeline"><Timeline events={events.filter(e => e.taskId === task.id)} /></Card>
-        <Artifacts projectId={p.id} taskId={task.id} />
+        <Artifacts projectId={p.id} taskId={task.id} workspacePath={p.state.worktree || p.repo} />
       </div>
     </div>
   );
@@ -385,7 +385,7 @@ function TasksView({ p, events, selected, onSelect }: { p: ProjectDetail; events
 
 const ARTIFACT_ORDER = (name: string) => [/^requirement/, /^plan/, /^diff-/, /^checks-/, /^security-\d+\.json/, /^review-parsed/, /^feedback/, /^manager-\d+\.json/, /^status-/, /^developer-.*\.md/, /\.log$/].findIndex(r => r.test(name)) >>> 0;
 
-function Artifacts({ projectId, taskId }: { projectId: string; taskId: string }) {
+function Artifacts({ projectId, taskId, workspacePath }: { projectId: string; taskId: string; workspacePath?: string }) {
   const files = useQuery({ queryKey: ['taskFiles', projectId, taskId], queryFn: () => api.taskFiles(projectId, taskId) });
   const list = useMemo(() => (files.data ?? []).filter(f => !f.name.endsWith('.schema.json')).sort((a, b) => ARTIFACT_ORDER(a.name) - ARTIFACT_ORDER(b.name) || a.name.localeCompare(b.name, undefined, { numeric: true })), [files.data]);
   const [open, setOpen] = useState<string>();
@@ -402,7 +402,7 @@ function Artifacts({ projectId, taskId }: { projectId: string; taskId: string })
       <ErrorNote error={content.error} />
       {current && content.data !== undefined && (
         (current.endsWith('.patch') || current.endsWith('.diff') || current.startsWith('diff-')) ? (
-          <DiffViewer patch={content.data} fileName={current} />
+          <DiffViewer patch={content.data} fileName={current} workspacePath={workspacePath} />
         ) : current.endsWith('.md') ? (
           <div className="rounded-lg border border-line bg-surface p-4 prose prose-sm dark:prose-invert max-w-none text-xs leading-relaxed overflow-x-auto">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{content.data}</ReactMarkdown>
